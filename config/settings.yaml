@@ -1,0 +1,29 @@
+# Configuración estática del sistema
+# IPs, Puertos, API Keys, Timeouts
+
+# API Keys
+openai_api_key: "your-openai-api-key-here"
+
+# FlightGear Simulator
+flightgear:
+  host: "localhost"
+  port: 5401
+  timeout: 5
+
+# Audio Configuration
+audio:
+  sample_rate: 16000
+  channels: 1
+  chunk_size: 1024
+
+# LLM Configuration
+llm:
+  model: "gpt-4o-mini"
+  temperature: 0.7
+  max_tokens: 500
+
+# System Timeouts
+timeouts:
+  instruction_processing: 30
+  worker_cycle: 0.1
+  listener_timeout: 60

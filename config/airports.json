@@ -1,0 +1,40 @@
+{
+    "airports": [
+        {
+            "icao": "LEMD",
+            "name": "Madrid-Barajas Adolfo Suárez",
+            "runways": [
+                {
+                    "id": "18L",
+                    "heading": 180,
+                    "ils_frequency": 109.3,
+                    "length_m": 4100
+                },
+                {
+                    "id": "36R",
+                    "heading": 360,
+                    "ils_frequency": 111.7,
+                    "length_m": 4100
+                }
+            ]
+        },
+        {
+            "icao": "KSFO",
+            "name": "San Francisco International",
+            "runways": [
+                {
+                    "id": "28L",
+                    "heading": 280,
+                    "ils_frequency": 111.7,
+                    "length_m": 3618
+                },
+                {
+                    "id": "28R",
+                    "heading": 280,
+                    "ils_frequency": 109.5,
+                    "length_m": 3618
+                }
+            ]
+        }
+    ]
+}
