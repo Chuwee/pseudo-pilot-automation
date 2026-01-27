@@ -1,60 +1,97 @@
 #!/usr/bin/env python3
 """
 PseudoPilot_Automation - Main Entry Point
-Orquestador de procesos (Master)
+Orquestador con Push-to-Talk Listener
 
-This is the main orchestrator that coordinates the LPIP (Language Parameter & Instruction Parser)
-and PIEM (Pseudo-pilot Instruction Execution Module) processes.
+This orchestrator starts a Push-to-Talk audio listener that captures voice commands
+and sends them to the instruction queue for processing.
 """
 
 import multiprocessing as mp
 from multiprocessing import Queue
 import logging
+import time
+import os
+from dotenv import load_dotenv
 from src.common.logger import setup_logger
-from src.lpip.worker import lpip_worker
+from src.lpip.listener import PushToTalkListener
 from src.piem.master import piem_master
+
+# Load environment variables from .env file
+load_dotenv()
+
+
+def handle_transcription(instruction_queue: Queue, transcription: str):
+    """
+    Callback para manejar las transcripciones
+    
+    Args:
+        instruction_queue: Cola para enviar comandos al PIEM
+        transcription: Texto transcrito desde el audio
+    """
+    logger = logging.getLogger(__name__)
+    logger.info(f"Received transcription: {transcription}")
+    
+    # Send transcription to PIEM for processing
+    instruction_queue.put({
+        "type": "voice_command",
+        "text": transcription,
+        "timestamp": time.time()
+    })
 
 
 def main():
     """
-    Main entry point - starts both LPIP and PIEM processes
+    Main entry point - starts Push-to-Talk listener and PIEM process
     """
     # Setup logging
     logger = setup_logger(__name__)
-    logger.info("Starting PseudoPilot_Automation System")
+    logger.info("Starting PseudoPilot_Automation System with Push-to-Talk")
     
-    # Create communication queue between LPIP and PIEM
+    # Create communication queue between Listener and PIEM
     instruction_queue = Queue()
     
-    # Start LPIP process (Node A: Language Parameter & Instruction Parser)
-    lpip_process = mp.Process(
-        target=lpip_worker,
-        args=(instruction_queue,),
-        name="LPIP_Worker"
+    # Create Push-to-Talk listener
+    ptt_listener = PushToTalkListener(
+        ptt_key="space",
+        sample_rate=16000,
+        channels=1
     )
     
-    # Start PIEM process (Node B: Pseudo-pilot Instruction Execution Module)
+    # Register callback to send transcriptions to the queue
+    ptt_listener.set_transcription_callback(
+        lambda text: handle_transcription(instruction_queue, text)
+    )
+    
+    # Start PIEM process (Pseudo-pilot Instruction Execution Module)
     piem_process = mp.Process(
         target=piem_master,
         args=(instruction_queue,),
         name="PIEM_Master"
     )
     
-    # Launch processes
-    lpip_process.start()
+    # Launch PIEM process
     piem_process.start()
+    logger.info("PIEM process started")
     
-    logger.info("Both LPIP and PIEM processes started")
+    # Start Push-to-Talk listener (runs in main thread)
+    ptt_listener.start()
     
-    # Wait for processes to complete
+    logger.info("Push-to-Talk system armed and ready")
+    
+    # Keep running until interrupted
     try:
-        lpip_process.join()
-        piem_process.join()
+        while True:
+            time.sleep(0.1)
+    
     except KeyboardInterrupt:
         logger.info("Shutting down gracefully...")
-        lpip_process.terminate()
+        
+        # Stop PTT listener
+        ptt_listener.stop()
+        
+        # Terminate PIEM process
         piem_process.terminate()
-        lpip_process.join()
         piem_process.join()
     
     logger.info("PseudoPilot_Automation System shut down")
@@ -62,3 +99,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
