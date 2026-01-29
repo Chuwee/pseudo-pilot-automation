@@ -1,138 +1,383 @@
+#!/usr/bin/env python3
 """
-Base de datos en memoria (Safety Layer)
-Almacena y valida el estado de los aviones para seguridad
+Context Database - In-memory database for aircraft tracking
+
+This module provides a lightweight, thread-safe in-memory database for tracking
+aircraft states and instructions in the pseudo-pilot system.
 """
 
+import threading
 from typing import Dict, List, Optional
-import time
-from src.common.logger import get_logger
-from src.common.types import Instruction, AircraftState
+import logging
+from datetime import datetime
+import json
 
-logger = get_logger(__name__)
+try:
+    from .aircraft import Aircraft, AircraftState
+except ImportError:
+    from aircraft import Aircraft, AircraftState
 
 
 class ContextDatabase:
     """
-    Base de datos en memoria que actúa como safety layer
-    Almacena estados históricos y valida instrucciones
+    In-memory context database for aircraft tracking
+    
+    This database uses a Python dictionary to store Aircraft objects, keyed by
+    their callsigns. It provides thread-safe operations for storing and retrieving
+    aircraft information.
+    
+    Features:
+    - Fast reads and writes using Python dict
+    - Thread-safe operations using locks
+    - Serializable to JSON for debugging/logging
+    - No persistence (in-memory only)
     """
     
-    def __init__(self, max_history: int = 1000):
-        """
-        Inicializa la base de datos de contexto
-        
-        Args:
-            max_history: Máximo número de estados históricos a mantener por avión
-        """
-        self.max_history = max_history
-        self.current_states: Dict[str, AircraftState] = {}
-        self.state_history: Dict[str, List[AircraftState]] = {}
-        
-        logger.info("ContextDatabase initialized")
+    def __init__(self):
+        """Initialize the context database"""
+        self._aircraft: Dict[str, Aircraft] = {}
+        self._lock = threading.RLock()  # Reentrant lock for nested operations
+        self._logger = logging.getLogger(__name__)
+        self._logger.info("Context Database initialized")
     
-    def save_state(self, state: AircraftState):
-        """
-        Guarda el estado actual de un avión
-        
-        Args:
-            state: Estado del avión
-        """
-        aircraft_id = state.aircraft_id
-        
-        # Actualizar estado actual
-        self.current_states[aircraft_id] = state
-        
-        # Añadir a historial
-        if aircraft_id not in self.state_history:
-            self.state_history[aircraft_id] = []
-        
-        self.state_history[aircraft_id].append(state)
-        
-        # Limitar tamaño del historial
-        if len(self.state_history[aircraft_id]) > self.max_history:
-            self.state_history[aircraft_id].pop(0)
-        
-        logger.debug(f"State saved for {aircraft_id}: alt={state.altitude_ft}ft, spd={state.airspeed_kts}kts")
+    # ========================================================================
+    # CREATE / UPDATE Operations
+    # ========================================================================
     
-    def get_current_state(self, aircraft_id: str) -> Optional[AircraftState]:
+    def add_aircraft(
+        self,
+        callsign: str,
+        altitude: float,
+        heading: float,
+        speed: float,
+        latitude: float,
+        longitude: float,
+        instruction: Optional[str] = None,
+        instruction_successful: Optional[bool] = None
+    ) -> Aircraft:
         """
-        Obtiene el estado actual de un avión
+        Add a new aircraft to the database or update if exists
         
         Args:
-            aircraft_id: ID del avión
+            callsign: Aircraft callsign (unique identifier)
+            altitude: Aircraft altitude in feet
+            heading: Aircraft heading in degrees
+            speed: Aircraft speed in knots
+            latitude: Aircraft latitude in decimal degrees
+            longitude: Aircraft longitude in decimal degrees
+            instruction: Optional initial instruction
+            instruction_successful: Optional instruction result
             
         Returns:
-            Estado actual, o None si no existe
+            The created/updated Aircraft object
+            
+        Raises:
+            ValueError: If any parameter is invalid
         """
-        return self.current_states.get(aircraft_id)
+        with self._lock:
+            callsign = callsign.upper().strip()
+            
+            # Create aircraft state
+            state = AircraftState(
+                altitude=altitude,
+                heading=heading,
+                speed=speed,
+                latitude=latitude,
+                longitude=longitude
+            )
+            
+            # Create aircraft
+            aircraft = Aircraft(
+                callsign=callsign,
+                current_state=state,
+                last_instruction=instruction,
+                last_instruction_successful=instruction_successful
+            )
+            
+            # Store in database
+            self._aircraft[callsign] = aircraft
+            
+            self._logger.info(f"Added aircraft {callsign} to context database")
+            return aircraft
     
-    def get_history(self, aircraft_id: str, limit: int = 100) -> List[AircraftState]:
+    def update_aircraft_state(
+        self,
+        callsign: str,
+        altitude: Optional[float] = None,
+        heading: Optional[float] = None,
+        speed: Optional[float] = None,
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None
+    ) -> Aircraft:
         """
-        Obtiene el historial de estados de un avión
+        Update the state of an existing aircraft
         
         Args:
-            aircraft_id: ID del avión
-            limit: Número máximo de estados a retornar
+            callsign: Aircraft callsign
+            altitude: New altitude (optional)
+            heading: New heading (optional)
+            speed: New speed (optional)
+            latitude: New latitude (optional)
+            longitude: New longitude (optional)
             
         Returns:
-            Lista de estados históricos
+            The updated Aircraft object
+            
+        Raises:
+            KeyError: If aircraft not found
         """
-        history = self.state_history.get(aircraft_id, [])
-        return history[-limit:] if limit else history
+        with self._lock:
+            callsign = callsign.upper().strip()
+            
+            if callsign not in self._aircraft:
+                raise KeyError(f"Aircraft {callsign} not found in database")
+            
+            aircraft = self._aircraft[callsign]
+            aircraft.update_state(
+                altitude=altitude,
+                heading=heading,
+                speed=speed,
+                latitude=latitude,
+                longitude=longitude
+            )
+            
+            self._logger.debug(f"Updated state for aircraft {callsign}")
+            return aircraft
     
-    def is_safe(self, instruction: Instruction, current_state: AircraftState) -> bool:
+    def set_instruction(
+        self,
+        callsign: str,
+        instruction: str,
+        successful: Optional[bool] = None
+    ) -> Aircraft:
         """
-        Valida si una instrucción es segura de ejecutar
+        Set an instruction for an aircraft
         
         Args:
-            instruction: Instrucción a validar
-            current_state: Estado actual del avión
+            callsign: Aircraft callsign
+            instruction: Instruction text
+            successful: Whether instruction was successful (None if pending)
             
         Returns:
-            True si es segura, False en caso contrario
+            The updated Aircraft object
+            
+        Raises:
+            KeyError: If aircraft not found
         """
-        # Reglas de seguridad básicas
-        
-        # 1. No subir tren si está en tierra
-        if instruction.instruction_type == "gear" and not instruction.parameters.get("value"):
-            if current_state.on_ground:
-                logger.warning("Safety check failed: Cannot retract gear while on ground")
-                return False
-        
-        # 2. No retraer flaps a alta velocidad
-        if instruction.instruction_type == "flaps":
-            max_flaps_speed = 200  # kts (ejemplo)
-            if current_state.airspeed_kts > max_flaps_speed and instruction.parameters["value"] > 0:
-                logger.warning(f"Safety check failed: Speed too high for flaps ({current_state.airspeed_kts} > {max_flaps_speed} kts)")
-                return False
-        
-        # 3. Validar altitudes razonables
-        if instruction.instruction_type == "altitude":
-            target_alt = instruction.parameters["value"]
-            if target_alt < 0 or target_alt > 60000:
-                logger.warning(f"Safety check failed: Unreasonable altitude ({target_alt} ft)")
-                return False
-        
-        # 4. Validar velocidades razonables
-        if instruction.instruction_type == "speed":
-            target_speed = instruction.parameters["value"]
-            if target_speed < 0 or target_speed > 500:
-                logger.warning(f"Safety check failed: Unreasonable speed ({target_speed} kts)")
-                return False
-        
-        logger.debug(f"Safety check passed for {instruction.instruction_type}")
-        return True
+        with self._lock:
+            callsign = callsign.upper().strip()
+            
+            if callsign not in self._aircraft:
+                raise KeyError(f"Aircraft {callsign} not found in database")
+            
+            aircraft = self._aircraft[callsign]
+            aircraft.set_instruction(instruction, successful)
+            
+            self._logger.info(
+                f"Set instruction for {callsign}: '{instruction}' "
+                f"(success={successful})"
+            )
+            return aircraft
     
-    def clear_history(self, aircraft_id: Optional[str] = None):
+    def mark_instruction_result(self, callsign: str, successful: bool) -> Aircraft:
         """
-        Limpia el historial de estados
+        Mark the result of the last instruction for an aircraft
         
         Args:
-            aircraft_id: ID del avión (None para limpiar todos)
+            callsign: Aircraft callsign
+            successful: Whether the instruction was successful
+            
+        Returns:
+            The updated Aircraft object
+            
+        Raises:
+            KeyError: If aircraft not found
+            ValueError: If no instruction has been set
         """
-        if aircraft_id:
-            self.state_history[aircraft_id] = []
-            logger.info(f"History cleared for {aircraft_id}")
-        else:
-            self.state_history.clear()
-            logger.info("All history cleared")
+        with self._lock:
+            callsign = callsign.upper().strip()
+            
+            if callsign not in self._aircraft:
+                raise KeyError(f"Aircraft {callsign} not found in database")
+            
+            aircraft = self._aircraft[callsign]
+            aircraft.mark_instruction_result(successful)
+            
+            self._logger.info(
+                f"Marked instruction result for {callsign}: {successful}"
+            )
+            return aircraft
+    
+    # ========================================================================
+    # READ Operations
+    # ========================================================================
+    
+    def get_aircraft(self, callsign: str) -> Optional[Aircraft]:
+        """
+        Get an aircraft by callsign
+        
+        Args:
+            callsign: Aircraft callsign
+            
+        Returns:
+            Aircraft object or None if not found
+        """
+        with self._lock:
+            callsign = callsign.upper().strip()
+            return self._aircraft.get(callsign)
+    
+    def has_aircraft(self, callsign: str) -> bool:
+        """
+        Check if an aircraft exists in the database
+        
+        Args:
+            callsign: Aircraft callsign
+            
+        Returns:
+            True if aircraft exists, False otherwise
+        """
+        with self._lock:
+            callsign = callsign.upper().strip()
+            return callsign in self._aircraft
+    
+    def get_all_aircraft(self) -> List[Aircraft]:
+        """
+        Get all aircraft in the database
+        
+        Returns:
+            List of all Aircraft objects
+        """
+        with self._lock:
+            return list(self._aircraft.values())
+    
+    def get_aircraft_count(self) -> int:
+        """
+        Get the total number of aircraft in the database
+        
+        Returns:
+            Number of aircraft
+        """
+        with self._lock:
+            return len(self._aircraft)
+    
+    def get_all_callsigns(self) -> List[str]:
+        """
+        Get all callsigns currently in the database
+        
+        Returns:
+            List of callsigns
+        """
+        with self._lock:
+            return list(self._aircraft.keys())
+    
+    # ========================================================================
+    # DELETE Operations
+    # ========================================================================
+    
+    def remove_aircraft(self, callsign: str) -> bool:
+        """
+        Remove an aircraft from the database
+        
+        Args:
+            callsign: Aircraft callsign
+            
+        Returns:
+            True if aircraft was removed, False if not found
+        """
+        with self._lock:
+            callsign = callsign.upper().strip()
+            
+            if callsign in self._aircraft:
+                del self._aircraft[callsign]
+                self._logger.info(f"Removed aircraft {callsign} from database")
+                return True
+            
+            return False
+    
+    def clear(self) -> int:
+        """
+        Clear all aircraft from the database
+        
+        Returns:
+            Number of aircraft that were removed
+        """
+        with self._lock:
+            count = len(self._aircraft)
+            self._aircraft.clear()
+            self._logger.info(f"Cleared all {count} aircraft from database")
+            return count
+    
+    # ========================================================================
+    # Utility / Serialization Methods
+    # ========================================================================
+    
+    def to_dict(self) -> Dict[str, dict]:
+        """
+        Convert entire database to dictionary
+        
+        Returns:
+            Dictionary mapping callsigns to aircraft data
+        """
+        with self._lock:
+            return {
+                callsign: aircraft.to_dict()
+                for callsign, aircraft in self._aircraft.items()
+            }
+    
+    def to_json(self, indent: int = 2) -> str:
+        """
+        Convert entire database to JSON string
+        
+        Args:
+            indent: JSON indentation level
+            
+        Returns:
+            JSON string representation
+        """
+        return json.dumps(self.to_dict(), indent=indent)
+    
+    def get_summary(self) -> str:
+        """
+        Get a human-readable summary of the database
+        
+        Returns:
+            Summary string
+        """
+        with self._lock:
+            count = len(self._aircraft)
+            
+            if count == 0:
+                return "Context Database: Empty (no aircraft tracked)"
+            
+            lines = [
+                f"Context Database Summary ({count} aircraft):",
+                "=" * 60
+            ]
+            
+            for aircraft in self._aircraft.values():
+                lines.append(str(aircraft))
+                if aircraft.last_instruction:
+                    success_str = (
+                        "✓" if aircraft.last_instruction_successful
+                        else "✗" if aircraft.last_instruction_successful is False
+                        else "?"
+                    )
+                    lines.append(
+                        f"  └─ Last instruction [{success_str}]: "
+                        f"{aircraft.last_instruction}"
+                    )
+            
+            lines.append("=" * 60)
+            return "\n".join(lines)
+    
+    def __len__(self) -> int:
+        """Return the number of aircraft in the database"""
+        return self.get_aircraft_count()
+    
+    def __contains__(self, callsign: str) -> bool:
+        """Check if a callsign exists in the database"""
+        return self.has_aircraft(callsign)
+    
+    def __repr__(self) -> str:
+        """String representation of database"""
+        return f"<ContextDatabase: {len(self._aircraft)} aircraft>"

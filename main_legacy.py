@@ -11,13 +11,11 @@ import multiprocessing as mp
 from multiprocessing import Queue
 import logging
 import time
-import os
 from dotenv import load_dotenv
-from src.common.logger import setup_logger
 from src.lpip.listener import PushToTalkListener
-from src.piem.master import piem_master
+from src.common import SystemLogger
 
-# Load environment variables from .env file
+# Cargar variables de entorno
 load_dotenv()
 
 
@@ -29,7 +27,7 @@ def handle_transcription(instruction_queue: Queue, transcription: str):
         instruction_queue: Cola para enviar comandos al PIEM
         transcription: Texto transcrito desde el audio
     """
-    logger = logging.getLogger(__name__)
+    logger = SystemLogger.get_logger()
     logger.info(f"Received transcription: {transcription}")
     
     # Send transcription to PIEM for processing
@@ -45,11 +43,12 @@ def main():
     Main entry point - starts Push-to-Talk listener and PIEM process
     """
     # Setup logging
-    logger = setup_logger(__name__)
+    logger = logging.getLogger(__name__)
     logger.info("Starting PseudoPilot_Automation System with Push-to-Talk")
     
     # Create communication queue between Listener and PIEM
     instruction_queue = Queue()
+    logger.debug("Launching instruction queue")
     
     # Create Push-to-Talk listener
     ptt_listener = PushToTalkListener(
@@ -64,14 +63,14 @@ def main():
     )
     
     # Start PIEM process (Pseudo-pilot Instruction Execution Module)
-    piem_process = mp.Process(
-        target=piem_master,
-        args=(instruction_queue,),
-        name="PIEM_Master"
-    )
+    # piem_process = mp.Process(
+    #     target=piem_master,
+    #     args=(instruction_queue,),
+    #     name="PIEM_Master"
+    # )
     
     # Launch PIEM process
-    piem_process.start()
+    #piem_process.start()
     logger.info("PIEM process started")
     
     # Start Push-to-Talk listener (runs in main thread)
@@ -91,8 +90,8 @@ def main():
         ptt_listener.stop()
         
         # Terminate PIEM process
-        piem_process.terminate()
-        piem_process.join()
+        # piem_process.terminate()
+        # piem_process.join()
     
     logger.info("PseudoPilot_Automation System shut down")
 

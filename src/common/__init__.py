@@ -1,12 +1,11 @@
 """Common utilities and shared components"""
 
-from .logger import get_logger, initialize_logger
+from .logger import SystemLogger
 from .types import Instruction, AircraftState, FlightPhase, SystemConfig
 from .queue_manager import QueueManager
 
 __all__ = [
-    'get_logger',
-    'initialize_logger',
+    'SystemLogger',
     'Instruction',
     'AircraftState',
     'FlightPhase',
