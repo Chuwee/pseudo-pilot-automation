@@ -8,6 +8,7 @@ import time
 from typing import Optional, Dict, Any
 from src.common.types import Instruction
 from src.common.logger import get_logger
+from src.context.context_database import ContextDatabase
 
 logger = get_logger(__name__)
 
@@ -18,7 +19,7 @@ class InstructionParser:
     usando un LLM (GPT-4o-mini)
     """
     
-    def __init__(self, api_key: str, model: str = "gpt-4o-mini", temperature: float = 0.7):
+    def __init__(self, api_key: str, model: str = "gpt-4o-mini", temperature: float = 0.7, context_database: ContextDatabase = None):
         """
         Inicializa el parser de instrucciones
         
@@ -37,22 +38,27 @@ class InstructionParser:
         # self.client = openai.Client(api_key=api_key)
     
     def _create_system_prompt(self) -> str:
-        """Crea el prompt del sistema para el LLM"""
-        return """You are an aviation instruction parser. Convert pilot instructions to JSON format.
+        return f"""You are an ATC instruction parser.
+  Your task is to extract:
+  1. Callsign (normalized).
+  2. Command (CLIMB, TURN, CONTACT, etc.).
+  3. Value (normalized to integer).
 
-Expected JSON format:
-{
-    "instruction_type": "heading|altitude|speed|flaps|gear|throttle",
-    "parameters": {
-        "value": <number>,
-        "unit": "<unit>"
-    }
-}
+  You must also construct reasonable response messages (readbacks). Be creative as to not be repetitive with the success and error messages.
+
+  Take into account that text transcriptions may be faulty, and so you should try to infer the correct information based on the context.
+
+  For example, if the text is "ryan air 559 blind and maintain 5000 feet", you should infer that the command is "ALTITUDE" and the value is 5000.
+
+  CURRENT AIRCRAFTS IN THE CONTEXT DATABASE:
+  {self.context_database.get_callsign_list()}
+
+  SUPPORTED COMMANDS:
+  {self.context_database.get_instructions_supported()}
 
 Examples:
-- "Turn left heading 270" -> {"instruction_type": "heading", "parameters": {"value": 270, "unit": "degrees"}}
-- "Climb and maintain 5000 feet" -> {"instruction_type": "altitude", "parameters": {"value": 5000, "unit": "feet"}}
-- "Reduce speed to 180 knots" -> {"instruction_type": "speed", "parameters": {"value": 180, "unit": "knots"}}
+- "Iberia 559 climb and maintain 5000 feet" -> {"callsign": "IBE559", "command": "ALTITUDE", "value": 5000, "success_msg": "Roger that, IBE559 climbing to 5000 feet", "error_msg": "Station calling, say again, instruction unclear"}
+- "Iberia 559 reduce speed to 180 knots" -> {"callsign": "IBE559", "command": "SPEED", "value": 180, "success_msg": "Roger that, IBE559 reducing speed to 180 knots", "error_msg": "Station calling, say again, instruction unclear"}
 
 Return ONLY valid JSON, no additional text."""
     
@@ -73,33 +79,7 @@ Return ONLY valid JSON, no additional text."""
         logger.info(f"Parsing instruction: '{text}'")
         
         try:
-            # TODO: Hacer llamada real al LLM
-            # response = self.client.chat.completions.create(
-            #     model=self.model,
-            #     messages=[
-            #         {"role": "system", "content": self._create_system_prompt()},
-            #         {"role": "user", "content": text}
-            #     ],
-            #     temperature=self.temperature
-            # )
-            # parsed_json = json.loads(response.choices[0].message.content)
-            
-            # Placeholder: simulación de respuesta del LLM
-            parsed_json = {
-                "instruction_type": "heading",
-                "parameters": {"value": 270, "unit": "degrees"}
-            }
-            
-            instruction = Instruction(
-                instruction_type=parsed_json["instruction_type"],
-                parameters=parsed_json["parameters"],
-                raw_text=text,
-                timestamp=time.time(),
-                confidence=0.95
-            )
-            
-            logger.info(f"Successfully parsed instruction: {instruction.instruction_type}")
-            return instruction
+            # call modelsi 
             
         except Exception as e:
             logger.error(f"Error parsing instruction: {e}")

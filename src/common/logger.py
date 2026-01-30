@@ -53,3 +53,16 @@ class SystemLogger:
         return cls.LOGGER_POINTER
 
 
+def get_logger(name: str = None) -> logging.Logger:
+    """
+    Get a logger instance for the given module name.
+    
+    Args:
+        name: Module name (typically __name__)
+        
+    Returns:
+        Logger instance
+    """
+    if name:
+        return logging.getLogger(name)
+    return SystemLogger.get_logger()

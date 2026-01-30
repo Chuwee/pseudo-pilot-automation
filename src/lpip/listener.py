@@ -109,12 +109,10 @@ class PushToTalkListener:
             if response.status_code != 200:
                 error_msg = f"HTTP {response.status_code}: {response.text}"
                 logger.error(f"[ERROR] {error_msg}")
-                print(f"\n[ERROR] {error_msg}")
                 return
             
             if not response.text.strip():
                 logger.error("[ERROR] Empty response from server")
-                print("\n[ERROR] Respuesta vacía del servidor")
                 return
             
             result = response.json()
@@ -122,7 +120,6 @@ class PushToTalkListener:
             if isinstance(result, dict) and "text" in result:
                 transcription = result["text"]
                 logger.info(f"Transcription: {transcription}")
-                print(f"\nTranscripción: {transcription}")
                 
                 # Call callback if registered
                 if self.transcription_callback:
@@ -130,14 +127,11 @@ class PushToTalkListener:
                     
             elif isinstance(result, dict) and "error" in result:
                 logger.error(f"[ERROR] API: {result['error']}")
-                print(f"\n[ERROR] API: {result['error']}")
             else:
                 logger.warning(f"[WARN] Unexpected response: {result}")
-                print(f"\n[WARN] Respuesta inesperada: {result}")
         
         except Exception as e:
             logger.error(f"[ERROR] {e}")
-            print(f"[ERROR] {e}")
         
         finally:
             # Clean up temporary file
@@ -169,7 +163,6 @@ class PushToTalkListener:
         keyboard.on_release_key(self.ptt_key, lambda e: self._stop_recording())
         
         logger.info(f"[OK] Push-to-talk system armed. Press {self.ptt_key.upper()} to speak")
-        print(f"\n[OK] Sistema PTT listo. Mantén pulsada '{self.ptt_key.upper()}' para hablar.\n")
     
     def stop(self):
         """Detiene el sistema de push-to-talk"""
@@ -182,7 +175,6 @@ class PushToTalkListener:
         keyboard.unhook_all()
         
         logger.info("Push-to-talk system stopped")
-        print("\n[OK] Sistema PTT detenido")
     
     def is_running(self):
         """Verifica si el sistema está activo"""
