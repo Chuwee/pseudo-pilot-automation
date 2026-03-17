@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any
 from src.common.types import Instruction
 from src.common.logger import get_logger
 from src.context.context_database import ContextDatabase
+from openai import OpenAI
 
 logger = get_logger(__name__)
 
@@ -34,8 +35,7 @@ class InstructionParser:
         
         logger.info(f"InstructionParser initialized (model: {model})")
         
-        # TODO: Inicializar cliente de OpenAI
-        # self.client = openai.Client(api_key=api_key)
+        self.client = OpenAI(api_key=api_key)
     
     def _create_system_prompt(self) -> str:
         return f"""You are an ATC instruction parser.
@@ -61,6 +61,51 @@ Examples:
 - "Iberia 559 reduce speed to 180 knots" -> {"callsign": "IBE559", "command": "SPEED", "value": 180, "success_msg": "Roger that, IBE559 reducing speed to 180 knots", "error_msg": "Station calling, say again, instruction unclear"}
 
 Return ONLY valid JSON, no additional text."""
+
+    def _call_model(self, system_prompt: str, user_prompt: str) -> Optional[Instruction]:
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=self.temperature
+            )
+            
+            if not response.choices:
+                logger.error("[ERROR] No response from model")
+                return None
+            
+            content = response.choices[0].message.content
+            
+            if not content:
+                logger.error("[ERROR] Empty response from model")
+                return None
+            
+            # Parse JSON response
+            try:
+                instruction_data = json.loads(content)
+                
+                # Create Instruction object
+                instruction = Instruction(
+                    callsign=instruction_data.get("callsign"),
+                    instruction_type=instruction_data.get("command"),
+                    parameters=instruction_data.get("parameters", {}),
+                    success_msg=instruction_data.get("success_msg"),
+                    error_msg=instruction_data.get("error_msg")
+                )
+                
+                return instruction
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"[ERROR] Failed to parse JSON: {e}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to call model: {e}")
+            return None
+
     
     def parse(self, text: str) -> Optional[Instruction]:
         """
@@ -79,7 +124,18 @@ Return ONLY valid JSON, no additional text."""
         logger.info(f"Parsing instruction: '{text}'")
         
         try:
-            # call modelsi 
+            system_prompt = self._create_system_prompt()
+            instruction = self._call_model(system_prompt, text)
+            
+            if not instruction:
+                logger.error("[ERROR] Failed to parse instruction")
+                return None
+            
+            if not self.validate_instruction(instruction):
+                logger.error("[ERROR] Invalid instruction")
+                return None
+            
+            return instruction
             
         except Exception as e:
             logger.error(f"Error parsing instruction: {e}")
@@ -95,7 +151,7 @@ Return ONLY valid JSON, no additional text."""
         Returns:
             True si es válida, False en caso contrario
         """
-        valid_types = ["heading", "altitude", "speed", "flaps", "gear", "throttle"]
+        valid_types = self.context_database.get_instructions_supported()
         
         if instruction.instruction_type not in valid_types:
             logger.warning(f"Invalid instruction type: {instruction.instruction_type}")

@@ -1,0 +1,411 @@
+#!/bin/bash
+
+# Pseudo-Pilot Automation Dashboard
+# Multi-component management panel for the entire project
+
+# Colors for output
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+NC='\033[0m' # No Color
+
+REDIS_CONTAINER="pseudo-pilot-redis"
+COMPOSE_FILE="docker-compose.yml"
+
+#===============================================================================
+# UTILITY FUNCTIONS
+#===============================================================================
+
+# Check if Redis container is running
+is_redis_running() {
+    docker ps --format '{{.Names}}' | grep -q "^${REDIS_CONTAINER}$"
+    return $?
+}
+
+#===============================================================================
+# REDIS COMPONENT
+#===============================================================================
+
+redis_status() {
+    echo "================================"
+    echo "Redis Database Status"
+    echo "================================"
+    
+    if is_redis_running; then
+        echo -e "Status: ${GREEN}●${NC} Running"
+        
+        uptime=$(docker ps --filter "name=${REDIS_CONTAINER}" --format '{{.Status}}')
+        echo "Uptime: $uptime"
+        
+        echo ""
+        echo "Connection Info:"
+        echo "  Host: localhost"
+        echo "  Port: 6379"
+        echo "  Container: $REDIS_CONTAINER"
+    else
+        echo -e "Status: ${RED}●${NC} Stopped"
+        echo ""
+        echo "Redis is not running. Use '$0 redis start' to start it."
+    fi
+    echo "================================"
+}
+
+redis_start() {
+    echo "Starting Redis container..."
+    
+    if is_redis_running; then
+        echo -e "${YELLOW}Redis is already running!${NC}"
+        return 0
+    fi
+    
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        echo -e "${RED}Error: docker-compose.yml not found!${NC}"
+        return 1
+    fi
+    
+    docker-compose up -d redis
+    
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✓ Redis started successfully${NC}"
+        sleep 2
+        if docker exec $REDIS_CONTAINER redis-cli ping > /dev/null 2>&1; then
+            echo -e "${GREEN}✓ Redis is responding to PING${NC}"
+        fi
+    else
+        echo -e "${RED}✗ Failed to start Redis${NC}"
+        return 1
+    fi
+}
+
+redis_stop() {
+    echo "Stopping Redis container..."
+    
+    if ! is_redis_running; then
+        echo -e "${YELLOW}Redis is not running!${NC}"
+        return 0
+    fi
+    
+    docker-compose stop redis
+    
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✓ Redis stopped successfully${NC}"
+    else
+        echo -e "${RED}✗ Failed to stop Redis${NC}"
+        return 1
+    fi
+}
+
+redis_info() {
+    echo "================================"
+    echo "Redis Server Information"
+    echo "================================"
+    
+    if ! is_redis_running; then
+        echo -e "${RED}Redis is not running. Start it first with '$0 redis start'${NC}"
+        return 1
+    fi
+    
+    info_output=$(docker exec $REDIS_CONTAINER redis-cli INFO 2>/dev/null)
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Error: Could not connect to Redis${NC}"
+        return 1
+    fi
+    
+    echo ""
+    echo -e "${BLUE}Server:${NC}"
+    echo "$info_output" | grep "^redis_version:" | sed 's/redis_version:/  Version: /'
+    echo "$info_output" | grep "^uptime_in_days:" | sed 's/uptime_in_days:/  Uptime (days): /'
+    
+    echo ""
+    echo -e "${BLUE}Clients:${NC}"
+    echo "$info_output" | grep "^connected_clients:" | sed 's/connected_clients:/  Connected: /'
+    
+    echo ""
+    echo -e "${BLUE}Memory:${NC}"
+    echo "$info_output" | grep "^used_memory_human:" | sed 's/used_memory_human:/  Used: /'
+    echo "$info_output" | grep "^used_memory_peak_human:" | sed 's/used_memory_peak_human:/  Peak: /'
+    
+    echo ""
+    echo -e "${BLUE}Stats:${NC}"
+    echo "$info_output" | grep "^total_commands_processed:" | sed 's/total_commands_processed:/  Total commands: /'
+    echo "$info_output" | grep "^instantaneous_ops_per_sec:" | sed 's/instantaneous_ops_per_sec:/  Ops\/sec: /'
+    
+    echo ""
+    echo -e "${BLUE}Keyspace:${NC}"
+    keys_info=$(echo "$info_output" | grep "^db0:")
+    if [ -z "$keys_info" ]; then
+        echo "  No keys stored"
+    else
+        echo "$keys_info" | sed 's/db0:/  DB0: /'
+    fi
+    
+    echo "================================"
+}
+
+redis_monitor() {
+    trap 'echo ""; echo "Monitoring stopped."; exit 0' INT
+    
+    while true; do
+        clear
+        
+        echo "╔════════════════════════════════════════════════════════════╗"
+        echo "║                    REDIS DATABASE                          ║"
+        echo "╚════════════════════════════════════════════════════════════╝"
+        echo ""
+        
+        if is_redis_running; then
+            echo -e "┌─ ${GREEN}STATUS: ● RUNNING${NC}"
+            
+            uptime=$(docker ps --filter "name=${REDIS_CONTAINER}" --format '{{.Status}}')
+            echo "│  Uptime: $uptime"
+            echo "│  Container: $REDIS_CONTAINER"
+            echo "└─ Connection: localhost:6379"
+            
+            echo ""
+            
+            info_output=$(docker exec $REDIS_CONTAINER redis-cli INFO 2>/dev/null)
+            
+            if [ $? -eq 0 ]; then
+                echo "┌─ SERVER INFO"
+                version=$(echo "$info_output" | grep "^redis_version:" | cut -d: -f2 | tr -d '\r')
+                uptime_days=$(echo "$info_output" | grep "^uptime_in_days:" | cut -d: -f2 | tr -d '\r')
+                echo "│  Redis: v$version"
+                echo "└─ Uptime: $uptime_days days"
+                
+                echo ""
+                echo "┌─ PERFORMANCE"
+                clients=$(echo "$info_output" | grep "^connected_clients:" | cut -d: -f2 | tr -d '\r')
+                ops=$(echo "$info_output" | grep "^instantaneous_ops_per_sec:" | cut -d: -f2 | tr -d '\r')
+                commands=$(echo "$info_output" | grep "^total_commands_processed:" | cut -d: -f2 | tr -d '\r')
+                echo "│  Connected Clients: $clients"
+                echo "│  Operations/sec: $ops"
+                echo "└─ Total Commands: $commands"
+                
+                echo ""
+                echo "┌─ MEMORY"
+                mem_used=$(echo "$info_output" | grep "^used_memory_human:" | cut -d: -f2 | tr -d '\r')
+                mem_peak=$(echo "$info_output" | grep "^used_memory_peak_human:" | cut -d: -f2 | tr -d '\r')
+                echo "│  Used: $mem_used"
+                echo "└─ Peak: $mem_peak"
+                
+                echo ""
+                echo "┌─ KEYSPACE"
+                keys_info=$(echo "$info_output" | grep "^db0:")
+                if [ -z "$keys_info" ]; then
+                    echo "└─ No keys stored"
+                else
+                    keys_count=$(echo "$keys_info" | grep -o "keys=[0-9]*" | cut -d= -f2)
+                    echo "└─ Keys: $keys_count"
+                fi
+            fi
+        else
+            echo -e "┌─ ${RED}STATUS: ● STOPPED${NC}"
+            echo "│"
+            echo "│  Redis container is not running"
+            echo "│  Use '$0 redis start' to start it"
+            echo "└─"
+        fi
+        
+        echo ""
+        echo "────────────────────────────────────────────────────────────"
+        echo -e "${BLUE}Refreshing every 2 seconds... Press Ctrl+C to exit${NC}"
+        
+        sleep 2
+    done
+}
+
+#===============================================================================
+# FLIGHTGEAR COMPONENT (Placeholder for future implementation)
+#===============================================================================
+
+flightgear_status() {
+    echo "================================"
+    echo "FlightGear Connection Status"
+    echo "================================"
+    echo -e "${YELLOW}Not yet implemented${NC}"
+    echo "Future: Check FlightGear connection, aircraft state, etc."
+    echo "================================"
+}
+
+flightgear_monitor() {
+    echo -e "${YELLOW}FlightGear monitor not yet implemented${NC}"
+}
+
+#===============================================================================
+# SYSTEM COMPONENT (All components overview)
+#===============================================================================
+
+system_monitor() {
+    trap 'echo ""; echo "Monitoring stopped."; exit 0' INT
+    
+    while true; do
+        clear
+        
+        echo "╔════════════════════════════════════════════════════════════╗"
+        echo "║         PSEUDO-PILOT AUTOMATION DASHBOARD                  ║"
+        echo "╚════════════════════════════════════════════════════════════╝"
+        echo ""
+        
+        # Redis Status
+        echo -e "${CYAN}┌─ REDIS DATABASE${NC}"
+        if is_redis_running; then
+            echo -e "└─ ${GREEN}● Running${NC}"
+        else
+            echo -e "└─ ${RED}● Stopped${NC}"
+        fi
+        
+        echo ""
+        
+        # FlightGear Status (placeholder)
+        echo -e "${CYAN}┌─ FLIGHTGEAR CONNECTION${NC}"
+        echo -e "└─ ${YELLOW}● Not Monitored${NC}"
+        
+        echo ""
+        
+        # Context Database (placeholder)
+        echo -e "${CYAN}┌─ CONTEXT DATABASE${NC}"
+        echo -e "└─ ${YELLOW}● Not Monitored${NC}"
+        
+        echo ""
+        echo "────────────────────────────────────────────────────────────"
+        echo -e "${BLUE}Refreshing every 2 seconds... Press Ctrl+C to exit${NC}"
+        echo -e "${BLUE}Use '$0 [component] monitor' for detailed view${NC}"
+        
+        sleep 2
+    done
+}
+
+system_status() {
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║         PSEUDO-PILOT AUTOMATION STATUS                     ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+    
+    echo -e "${CYAN}Redis Database:${NC}"
+    if is_redis_running; then
+        echo -e "  ${GREEN}● Running${NC}"
+    else
+        echo -e "  ${RED}● Stopped${NC}"
+    fi
+    
+    echo ""
+    echo -e "${CYAN}FlightGear Connection:${NC}"
+    echo -e "  ${YELLOW}● Not Monitored${NC} (not yet implemented)"
+    
+    echo ""
+    echo -e "${CYAN}Context Database:${NC}"
+    echo -e "  ${YELLOW}● Not Monitored${NC} (not yet implemented)"
+}
+
+#===============================================================================
+# HELP & ROUTING
+#===============================================================================
+
+show_help() {
+    echo "Pseudo-Pilot Automation Dashboard"
+    echo ""
+    echo "Usage: $0 [component] [action]"
+    echo ""
+    echo "Components:"
+    echo "  redis         Redis database management"
+    echo "  flightgear    FlightGear connection (not yet implemented)"
+    echo "  system        Overall system status"
+    echo ""
+    echo "Actions:"
+    echo "  monitor       Continuously monitor component (Ctrl+C to exit)"
+    echo "  status        Show component status (one-time)"
+    echo "  start         Start component"
+    echo "  stop          Stop component"
+    echo "  info          Show detailed component information"
+    echo ""
+    echo "Examples:"
+    echo "  $0 redis monitor        Monitor Redis in a panel"
+    echo "  $0 redis start          Start Redis container"
+    echo "  $0 system monitor       Monitor all components"
+    echo "  $0 system status        Show status of all components"
+    echo ""
+}
+
+#===============================================================================
+# MAIN COMMAND ROUTER
+#===============================================================================
+
+COMPONENT=$1
+ACTION=$2
+
+# Handle no arguments or help
+if [ -z "$COMPONENT" ] || [ "$COMPONENT" = "help" ] || [ "$COMPONENT" = "--help" ] || [ "$COMPONENT" = "-h" ]; then
+    show_help
+    exit 0
+fi
+
+# Route to component handlers
+case "$COMPONENT" in
+    redis)
+        case "$ACTION" in
+            monitor)
+                redis_monitor
+                ;;
+            status)
+                redis_status
+                ;;
+            start)
+                redis_start
+                ;;
+            stop)
+                redis_stop
+                ;;
+            info)
+                redis_info
+                ;;
+            *)
+                echo -e "${RED}Unknown action for redis: $ACTION${NC}"
+                echo "Available actions: monitor, status, start, stop, info"
+                exit 1
+                ;;
+        esac
+        ;;
+    
+    flightgear)
+        case "$ACTION" in
+            monitor)
+                flightgear_monitor
+                ;;
+            status)
+                flightgear_status
+                ;;
+            *)
+                echo -e "${YELLOW}FlightGear component not fully implemented yet${NC}"
+                echo "Available actions will be: monitor, status"
+                exit 1
+                ;;
+        esac
+        ;;
+    
+    system)
+        case "$ACTION" in
+            monitor)
+                system_monitor
+                ;;
+            status)
+                system_status
+                ;;
+            *)
+                echo -e "${RED}Unknown action for system: $ACTION${NC}"
+                echo "Available actions: monitor, status"
+                exit 1
+                ;;
+        esac
+        ;;
+    
+    *)
+        echo -e "${RED}Unknown component: $COMPONENT${NC}"
+        echo ""
+        show_help
+        exit 1
+        ;;
+esac
